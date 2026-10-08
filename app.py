@@ -414,7 +414,7 @@ with tab_visualizza:
     else:
         st.info("Nessun dato presente nel database. Compila una scheda o importa un file Excel.")
 
-# --- SCHEDA 2: INSERIMENTO DIRETTO NATIVO (SENZA IFRAME) ---
+# --- SCHEDA 2: INSERIMENTO DIRETTO NATIVO (CON TUTTI I CAMPI CORRETTI) ---
 with tab_compila:
     st.subheader("📝 Compilazione Scheda Screening (Inserimento Diretto)")
     st.markdown("Inserisci i dati del cittadino: verranno inviati al **Cloud Kobo** e salvati all'istante nel database dell'app.")
@@ -441,16 +441,16 @@ with tab_compila:
             glicemia_m = st.number_input("Glicemia (mg/dl)", min_value=30, max_value=500, value=90)
         with cp4:
             colesterolo_m = st.number_input("Colesterolo (mg/dl)", min_value=50, max_value=600, value=180)
+            
+        cp5, cp6, cp7, cp8 = st.columns(4)
         with cp5:
-        	 trigliceridi_m = st.number_input("Trigliceridi (mg/dl)", min_value=50, max_value=600, value=180)
+            trigliceridi_m = st.number_input("Trigliceridi (mg/dl)", min_value=30, max_value=800, value=150)
         with cp6:
-        	 uricemia_m = st.number_input("Uricemia (mg/dl)", min_value=1, max_value=20, value=10)	 
-   
-        cp7, cp8 = st.columns(2)
+            uricemia_m = st.number_input("Uricemia (mg/dl)", min_value=1.0, max_value=20.0, value=5.0)
         with cp7:
-            p_max_m = st.number_input("Pressione Sistemica Max (mmHg)", min_value=50, max_value=250, value=120)
+            p_max_m = st.number_input("Pressione Max (mmHg)", min_value=50, max_value=250, value=120)
         with cp8:
-            p_min_m = st.number_input("Pressione Diastolica Min (mmHg)", min_value=30, max_value=150, value=80)
+            p_min_m = st.number_input("Pressione Min (mmHg)", min_value=30, max_value=150, value=80)
 
         st.markdown("#### 3. Punteggi Stili di Vita (Valori Radar: -1 = Non Valido, 1 = Basso, 2 = Medio, 3 = Ottimale)")
         cr1, cr2, cr3, cr4, cr5, cr6 = st.columns(6)
