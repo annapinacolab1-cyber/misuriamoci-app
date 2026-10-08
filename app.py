@@ -65,7 +65,7 @@ def ottieni_database_completo():
         return df_loc
     
     df_unito = pd.concat([df_loc, df_kob], ignore_index=True)
-    cols_check = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo', 'Trigliceridi', Uricemia'] if c in df_unito.columns]
+    cols_check = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo'] if c in df_unito.columns]
     if cols_check:
         df_unito = df_unito.drop_duplicates(subset=cols_check, keep='last').reset_index(drop=True)
     return df_unito
