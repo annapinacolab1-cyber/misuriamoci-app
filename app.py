@@ -1,4 +1,5 @@
 import streamlit as st
+import requests
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,10 +10,13 @@ import json
 # Configurazione della pagina Streamlit
 st.set_page_config(layout="wide", page_title="Piattaforma Screening - Misuriamoci")
 
-# Path per i salvataggi persistenti sul server
+# Path e Credenziali
 DATA_FILE = "database_misuriamoci_persistente.csv"
 USERS_FILE = "utenti_db.json"
 
+KOBO_TOKEN = "6a1f13e6c6833e0b213b3c34a171f3f2ab785833"
+FORM_ID = "MWb6A71g"
+URL_LETTURA = f"https://eu.kobotoolbox.org/api/v2/assets/{FORM_ID}/data.json?limit=10000"
 URL_FORM_WEB = "https://ee-eu.kobotoolbox.org/x/MWb6A71g"
 
 COLONNE_PRIVACY = [
@@ -22,7 +26,7 @@ COLONNE_PRIVACY = [
 ]
 
 # =========================================================
-# 1. FUNZIONI PER SALVATAGGIO E CARICAMENTO PERSISTENTE
+# 1. FUNZIONI PER SALVATAGGIO E CARICAMENTO DATI
 # =========================================================
 def carica_database_locale():
     if os.path.exists(DATA_FILE):
@@ -34,6 +38,38 @@ def carica_database_locale():
 
 def salva_database_locale(df):
     df.to_csv(DATA_FILE, index=False)
+
+def scarica_dati_kobo():
+    """Scarica le nuove schede compilate direttamente da KoboToolbox Cloud"""
+    headers = {"Authorization": f"Token {KOBO_TOKEN}"}
+    try:
+        response = requests.get(URL_LETTURA, headers=headers, timeout=5)
+        if response.status_code == 200:
+            results = response.json().get('results', [])
+            if results:
+                return pd.DataFrame(results)
+    except:
+        pass
+    return pd.DataFrame()
+
+def ottieni_database_completo():
+    """Unisce il database dell'Excel con le nuove schede inviate dal Form Kobo"""
+    df_loc = carica_database_locale()
+    df_kob = scarica_dati_kobo()
+    
+    if df_loc.empty and df_kob.empty:
+        return pd.DataFrame()
+    if df_loc.empty:
+        return df_kob
+    if df_kob.empty:
+        return df_loc
+    
+    # Unione e deduplicazione
+    df_unito = pd.concat([df_loc, df_kob], ignore_index=True)
+    cols_check = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo'] if c in df_unito.columns]
+    if cols_check:
+        df_unito = df_unito.drop_duplicates(subset=cols_check, keep='last').reset_index(drop=True)
+    return df_unito
 
 def carica_utenti():
     if os.path.exists(USERS_FILE):
@@ -128,8 +164,8 @@ with col_h2:
         st.session_state['user_info'] = None
         st.rerun()
 
-# Caricamento del database persistente
-df_attuale = carica_database_locale()
+# Caricamento del database completo (Locale + Kobo Cloud)
+df_attuale = ottieni_database_completo()
 
 # =========================================================
 # 4. SCHEDE APPLICAZIONE
@@ -148,7 +184,12 @@ tab_admin = tabs[3] if user_curr['ruolo'] == "Admin" else None
 
 # --- SCHEDA 1: ARCHIVIO SCREENING & DASHBOARD ANALITICA ---
 with tab_visualizza:
-    st.subheader("Database Centrale Screening")
+    col_t1, col_t2 = st.columns([3, 1])
+    with col_t1:
+        st.subheader("Database Centrale Screening")
+    with col_t2:
+        if st.button("🔄 Sincronizza con Kobo Cloud", use_container_width=True):
+            st.rerun()
     
     if not df_attuale.empty:
         col_tabella, col_grafico = st.columns([3, 2])
@@ -355,7 +396,7 @@ with tab_visualizza:
         st.pyplot(fig_custom)
 
     else:
-        st.info("Nessun dato presente nel database. Vai alla scheda 'Importa Excel Storico' per caricare il tuo file.")
+        st.info("Nessun dato presente nel database. Compila un form o importa un file Excel.")
 
 # --- SCHEDA 2: NUOVO INSERIMENTO DIGITALE ---
 with tab_compila:
@@ -428,7 +469,6 @@ if tab_admin is not None:
             df_utenti = pd.DataFrame.from_dict(st.session_state['utenti_db'], orient='index')
             df_utenti = df_utenti.reset_index().rename(columns={'index': 'Username'})
             
-            # Garanzia presenza colonna email
             if 'email' not in df_utenti.columns:
                 df_utenti['email'] = 'Non specificata'
             
