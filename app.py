@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
+import uuid
 
 # Configurazione della pagina Streamlit
 st.set_page_config(layout="wide", page_title="Piattaforma Screening - Misuriamoci")
@@ -16,6 +17,7 @@ FORM_ID = "MWb6A71g"
 
 URL_LETTURA = f"https://eu.kobotoolbox.org/api/v2/assets/{FORM_ID}/data.json?limit=10000"
 URL_FORM_WEB = "https://ee-eu.kobotoolbox.org/x/MWb6A71g"
+URL_SUBMISSION = "https://eu.kobotoolbox.org/submission"
 
 COLONNE_PRIVACY = [
     'nome', 'cognome', 'nome e cognome', 'nome_e_cognome', 
@@ -24,7 +26,7 @@ COLONNE_PRIVACY = [
 ]
 
 # =========================================================
-# 2. GESTIONE AUTENTICAZIONE E MEMORIA LOCALE DEDICATA
+# 2. GESTIONE AUTENTICAZIONE E UTENTI
 # =========================================================
 if 'utenti_db' not in st.session_state:
     st.session_state['utenti_db'] = {
@@ -46,10 +48,6 @@ if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state:
     st.session_state['user_info'] = None
-
-# MEMORIA PERSISTENTE PER I DATI
-if 'df_master' not in st.session_state:
-    st.session_state['df_master'] = pd.DataFrame()
 
 def mostra_login():
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -83,7 +81,7 @@ if not st.session_state['logged_in']:
     st.stop()
 
 # =========================================================
-# 3. INTESTAZIONE ED ELEMENTI PER UTENTE AUTENTICATO
+# 3. INTESTAZIONE ED ELEMENTI UTENTE AUTENTICATO
 # =========================================================
 user_curr = st.session_state['user_info']
 
@@ -103,10 +101,10 @@ with col_h2:
         st.session_state['user_info'] = None
         st.rerun()
 
-
 # =========================================================
-# 4. CARICAMENTO E UNIONE AUTOMATICA DEI DATI
+# 4. DOWNLOAD DATABASE DA KOBO CLOUD
 # =========================================================
+@st.cache_data(ttl=10)
 def scarica_database_kobo():
     headers = {"Authorization": f"Token {KOBO_TOKEN}"}
     try:
@@ -119,13 +117,13 @@ def scarica_database_kobo():
     except:
         return pd.DataFrame()
 
-# Se la memoria master è vuota, proviamo a sincronizzare con Kobo
-if st.session_state['df_master'].empty:
-    df_kobo = scarica_database_kobo()
-    if not df_kobo.empty:
-        st.session_state['df_master'] = df_kobo.copy()
+df_attuale = scarica_database_kobo()
 
-df_attuale = st.session_state['df_master'].copy()
+# De-duplicazione clinica
+if not df_attuale.empty:
+    cols_cliniche = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo', 'Pressione_massima'] if c in df_attuale.columns]
+    if cols_cliniche:
+        df_attuale = df_attuale.drop_duplicates(subset=cols_cliniche, keep='last').reset_index(drop=True)
 
 # =========================================================
 # 5. SCHEDE APPLICAZIONE
@@ -144,13 +142,19 @@ tab_admin = tabs[3] if user_curr['ruolo'] == "Admin" else None
 
 # --- SCHEDA 1: ARCHIVIO SCREENING & DASHBOARD ANALITICA ---
 with tab_visualizza:
-    st.subheader("Database Centrale Screening")
+    st.subheader("Database Centrale Screening (Cloud Permanete)")
     
+    col_ref, _ = st.columns([1, 4])
+    with col_ref:
+        if st.button("🔄 Aggiorna Dati dal Cloud"):
+            st.cache_data.clear()
+            st.rerun()
+
     if not df_attuale.empty:
         col_tabella, col_grafico = st.columns([3, 2])
         
         with col_tabella:
-            st.write(f"### Record totali presenti nel sistema: **{len(df_attuale)}**")
+            st.write(f"### Record totali salvati nel cloud: **{len(df_attuale)}**")
             st.dataframe(df_attuale, use_container_width=True)
             
             if user_curr['ruolo'] == "Admin":
@@ -164,13 +168,24 @@ with tab_visualizza:
                     sesso_s = str(r.get('Sesso', 'N/D')).strip()
                     opzioni_soggetti.append(f"Scheda ID {idx} - Data: {data_str} ({sesso_s}, {eta_s} anni)")
                 
-                soggetto_da_cancellare = st.selectbox("Seleziona la scheda da rimuovere dal database:", opzioni_soggetti)
+                soggetto_da_cancellare = st.selectbox("Seleziona la scheda da rimuovere dal cloud:", opzioni_soggetti)
                 
-                if st.button("❌ Elimina Definitivamente Questa Scheda"):
+                if st.button("❌ Elimina Definitivamente Questa Scheda dal Cloud"):
                     idx_target = int(soggetto_da_cancellare.split(" - ")[0].replace("Scheda ID ", ""))
-                    st.session_state['df_master'] = st.session_state['df_master'].drop(idx_target).reset_index(drop=True)
-                    st.success("Scheda eliminata con successo!")
-                    st.rerun()
+                    row_target = df_attuale.loc[idx_target]
+                    kobo_id = row_target.get('_id')
+                    
+                    if kobo_id:
+                        url_del = f"https://eu.kobotoolbox.org/api/v2/assets/{FORM_ID}/data/{kobo_id}/"
+                        headers_del = {"Authorization": f"Token {KOBO_TOKEN}"}
+                        res_del = requests.delete(url_del, headers=headers_del)
+                        
+                        if res_del.status_code in [200, 204]:
+                            st.success("Scheda eliminata dal cloud Kobo!")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("Errore durante l'eliminazione dal cloud Kobo.")
 
                 st.write("---")
                 output = BytesIO()
@@ -350,7 +365,7 @@ with tab_visualizza:
         st.pyplot(fig_custom)
 
     else:
-        st.info("Nessun dato presente nel database. Vai alla scheda 'Importa Excel Storico' per caricare il tuo file.")
+        st.info("Nessun dato presente nel database cloud. Vai alla scheda 'Importa Excel Storico' per caricare il tuo file.")
 
 # --- SCHEDA 2: NUOVO INSERIMENTO DIGITALE ---
 with tab_compila:
@@ -369,10 +384,10 @@ with tab_compila:
     '''
     st.components.v1.html(iframe_form, height=920, scrolling=True)
 
-# --- SCHEDA 3: IMPORTAZIONE AUTOMATIZZATA EXCEL ---
+# --- SCHEDA 3: IMPORTAZIONE PERMANENTE SU KOBO CLOUD ---
 with tab_importa:
-    st.subheader("Caricamento ed Estensione del Database (Anonimizzato)")
-    st.markdown("🔒 **Protezione Dati:** I campi personali (*Nome, Cognome, Email, Telefono*) vengono **automaticamente esclusi**.")
+    st.subheader("Caricamento ed Estensione Permanete del Database Cloud")
+    st.markdown("🔒 **Protezione Dati:** I campi personali (*Nome, Cognome, Email, Telefono*) vengono **esclusi** prima del salvataggio nel cloud.")
     
     file_caricato = st.file_uploader("Trascina qui il file Excel con i soggetti", type=["xlsx"])
     
@@ -387,23 +402,52 @@ with tab_importa:
             ]
             df_anonimo = df_excel[colonne_da_mantenere].copy()
             
-            st.write(f"### Rilevati **{len(df_anonimo)}** soggetti nell'Excel:")
+            st.write(f"### Rilevati **{len(df_anonimo)}** soggetti nell'Excel (*pronti per l'invio permanente al cloud*):")
             st.dataframe(df_anonimo.astype(str), use_container_width=True)
             
-            if st.button("🚀 Importa Soggetti nel Database dell'App"):
-                # Salva i dati direttamente nella memoria MASTER permanente dell'app
-                if st.session_state['df_master'].empty:
-                    st.session_state['df_master'] = df_anonimo.copy()
-                else:
-                    st.session_state['df_master'] = pd.concat(
-                        [st.session_state['df_master'], df_anonimo], 
-                        ignore_index=True
-                    )
+            if st.button("🚀 Salva Definitivamente i Soggetti nel Cloud Kobo"):
+                headers = {"Authorization": f"Token {KOBO_TOKEN}"}
+                successi = 0
+                errori = 0
                 
-                st.success(f"🎉 Importati con successo {len(df_anonimo)} soggetti!")
+                barra_progresso = st.progress(0)
+                totale = len(df_anonimo)
+                
+                for riga_id, (_, riga) in enumerate(df_anonimo.iterrows()):
+                    campi_form = {}
+                    for colonna, valore in riga.items():
+                        if pd.notna(valore) and str(valore).strip() != "":
+                            col_nome = str(colonna).strip()
+                            if isinstance(valore, pd.Timestamp) or (hasattr(valore, 'strftime')):
+                                val_str = valore.strftime('%Y-%m-%d')
+                            else:
+                                val_str = str(valore).strip()
+                            campi_form[col_nome] = val_str
+                    
+                    data_screening = campi_form.get('Data_Misuriamoci', '2026-01-01')
+                    
+                    xml_data = f'<data id="{FORM_ID}">'
+                    for col_nome, val_str in campi_form.items():
+                        tag_valido = col_nome.replace(" ", "_").replace("/", "_").replace("-", "_")
+                        xml_data += f'<{tag_valido}>{val_str}</{tag_valido}>'
+                    
+                    uid_univoco = f"uuid:{uuid.uuid4()}"
+                    xml_data += f'<meta><instanceID>{uid_univoco}</instanceID></meta>'
+                    xml_data += '</data>'
+                    
+                    files = {'xml_submission_file': ('submission.xml', xml_data, 'text/xml')}
+                    res = requests.post(URL_SUBMISSION, headers=headers, files=files)
+                    
+                    if res.status_code in [200, 201, 202]:
+                        successi += 1
+                    else:
+                        errori += 1
+                    
+                    barra_progresso.progress((riga_id + 1) / totale)
+                
+                st.success(f"🎉 Salvati con successo {successi} soggetti nel database cloud permanente di Kobo!")
+                st.cache_data.clear()
                 st.balloons()
-                
-                # Forza il ricaricamento così la prima scheda si aggiorna istantaneamente
                 st.rerun()
                     
         except Exception as e:
