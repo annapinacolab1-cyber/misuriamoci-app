@@ -478,6 +478,8 @@ with tab_compila:
             "Altezza": str(altezza_m),
             "Glicemia": str(glicemia_m),
             "Colesterolo": str(colesterolo_m),
+            "Trigliceridi": str(trigliceridi_m),
+            "Uricemia": str(uricemia_m),
             "Pressione_massima": str(p_max_m),
             "Pressione_minima": str(p_min_m),
             "Alimentazione": alim_m,
