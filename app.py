@@ -1,23 +1,17 @@
 import streamlit as st
-import requests
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
-import uuid
+import os
 
 # Configurazione della pagina Streamlit
 st.set_page_config(layout="wide", page_title="Piattaforma Screening - Misuriamoci")
 
-# =========================================================
-# 1. CREDENZIALI E DOMINI KOBOTOOLBOX (SERVER EU)
-# =========================================================
-KOBO_TOKEN = "6a1f13e6c6833e0b213b3c34a171f3f2ab785833"
-FORM_ID = "MWb6A71g"
+# Path per il salvataggio persistente dei dati sul server
+DATA_FILE = "database_misuriamoci_persistente.csv"
 
-URL_LETTURA = f"https://eu.kobotoolbox.org/api/v2/assets/{FORM_ID}/data.json?limit=10000"
 URL_FORM_WEB = "https://ee-eu.kobotoolbox.org/x/MWb6A71g"
-URL_SUBMISSION = "https://eu.kobotoolbox.org/submission"
 
 COLONNE_PRIVACY = [
     'nome', 'cognome', 'nome e cognome', 'nome_e_cognome', 
@@ -26,7 +20,21 @@ COLONNE_PRIVACY = [
 ]
 
 # =========================================================
-# 2. GESTIONE AUTENTICAZIONE E UTENTI
+# 1. FUNZIONI PER SALVATAGGIO E CARICAMENTO PERSISTENTE
+# =========================================================
+def carica_database_locale():
+    if os.path.exists(DATA_FILE):
+        try:
+            return pd.read_csv(DATA_FILE)
+        except:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+def salva_database_locale(df):
+    df.to_csv(DATA_FILE, index=False)
+
+# =========================================================
+# 2. GESTIONE AUTENTICAZIONE UTENTI
 # =========================================================
 if 'utenti_db' not in st.session_state:
     st.session_state['utenti_db'] = {
@@ -101,32 +109,11 @@ with col_h2:
         st.session_state['user_info'] = None
         st.rerun()
 
-# =========================================================
-# 4. DOWNLOAD DATABASE DA KOBO CLOUD
-# =========================================================
-@st.cache_data(ttl=10)
-def scarica_database_kobo():
-    headers = {"Authorization": f"Token {KOBO_TOKEN}"}
-    try:
-        response = requests.get(URL_LETTURA, headers=headers)
-        if response.status_code == 200:
-            results = response.json().get('results', [])
-            if results:
-                return pd.DataFrame(results)
-        return pd.DataFrame()
-    except:
-        return pd.DataFrame()
-
-df_attuale = scarica_database_kobo()
-
-# De-duplicazione clinica
-if not df_attuale.empty:
-    cols_cliniche = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo', 'Pressione_massima'] if c in df_attuale.columns]
-    if cols_cliniche:
-        df_attuale = df_attuale.drop_duplicates(subset=cols_cliniche, keep='last').reset_index(drop=True)
+# Caricamento del database persistente
+df_attuale = carica_database_locale()
 
 # =========================================================
-# 5. SCHEDE APPLICAZIONE
+# 4. SCHEDE APPLICAZIONE
 # =========================================================
 elenco_schede = ["📊 Archivio Screening & Grafici", "📝 Compila Nuovo Form", "📥 Importa Excel Storico"]
 
@@ -142,19 +129,13 @@ tab_admin = tabs[3] if user_curr['ruolo'] == "Admin" else None
 
 # --- SCHEDA 1: ARCHIVIO SCREENING & DASHBOARD ANALITICA ---
 with tab_visualizza:
-    st.subheader("Database Centrale Screening (Cloud Permanete)")
+    st.subheader("Database Centrale Screening")
     
-    col_ref, _ = st.columns([1, 4])
-    with col_ref:
-        if st.button("🔄 Aggiorna Dati dal Cloud"):
-            st.cache_data.clear()
-            st.rerun()
-
     if not df_attuale.empty:
         col_tabella, col_grafico = st.columns([3, 2])
         
         with col_tabella:
-            st.write(f"### Record totali salvati nel cloud: **{len(df_attuale)}**")
+            st.write(f"### Record totali salvati nel database: **{len(df_attuale)}**")
             st.dataframe(df_attuale, use_container_width=True)
             
             if user_curr['ruolo'] == "Admin":
@@ -163,29 +144,19 @@ with tab_visualizza:
                 
                 opzioni_soggetti = []
                 for idx, r in df_attuale.iterrows():
-                    data_str = str(r.get('Data_Misuriamoci', '')).strip()
-                    eta_s = str(r.get('Et', 'N/D')).strip()
+                    data_str = str(r.get('Data_Misuriamoci', r.get('Data', ''))).strip()
+                    eta_s = str(r.get('Et', r.get('Eta', 'N/D'))).strip()
                     sesso_s = str(r.get('Sesso', 'N/D')).strip()
                     opzioni_soggetti.append(f"Scheda ID {idx} - Data: {data_str} ({sesso_s}, {eta_s} anni)")
                 
-                soggetto_da_cancellare = st.selectbox("Seleziona la scheda da rimuovere dal cloud:", opzioni_soggetti)
+                soggetto_da_cancellare = st.selectbox("Seleziona la scheda da rimuovere dal database:", opzioni_soggetti)
                 
-                if st.button("❌ Elimina Definitivamente Questa Scheda dal Cloud"):
+                if st.button("❌ Elimina Definitivamente Questa Scheda"):
                     idx_target = int(soggetto_da_cancellare.split(" - ")[0].replace("Scheda ID ", ""))
-                    row_target = df_attuale.loc[idx_target]
-                    kobo_id = row_target.get('_id')
-                    
-                    if kobo_id:
-                        url_del = f"https://eu.kobotoolbox.org/api/v2/assets/{FORM_ID}/data/{kobo_id}/"
-                        headers_del = {"Authorization": f"Token {KOBO_TOKEN}"}
-                        res_del = requests.delete(url_del, headers=headers_del)
-                        
-                        if res_del.status_code in [200, 204]:
-                            st.success("Scheda eliminata dal cloud Kobo!")
-                            st.cache_data.clear()
-                            st.rerun()
-                        else:
-                            st.error("Errore durante l'eliminazione dal cloud Kobo.")
+                    df_nuovo = df_attuale.drop(idx_target).reset_index(drop=True)
+                    salva_database_locale(df_nuovo)
+                    st.success("Scheda eliminata con successo!")
+                    st.rerun()
 
                 st.write("---")
                 output = BytesIO()
@@ -205,8 +176,8 @@ with tab_visualizza:
             
             lista_soggetti_radar = ["-- Ultimo Inserimento Valido --"]
             for idx, r in df_attuale.iterrows():
-                data_s = str(r.get('Data_Misuriamoci', '')).strip()
-                eta_s = str(r.get('Et', 'N/D')).strip()
+                data_s = str(r.get('Data_Misuriamoci', r.get('Data', ''))).strip()
+                eta_s = str(r.get('Et', r.get('Eta', 'N/D'))).strip()
                 sesso_s = str(r.get('Sesso', 'N/D')).strip()
                 lista_soggetti_radar.append(f"ID {idx}: {sesso_s}, {eta_s} anni [{data_s}]")
             
@@ -300,7 +271,7 @@ with tab_visualizza:
 
         colonne_numeriche = [
             c for c in df_analisi.columns 
-            if pd.api.types.is_numeric_dtype(df_analisi[c]) and df_analisi[c].notna().sum() > 5
+            if pd.api.types.is_numeric_dtype(df_analisi[c]) and df_analisi[c].notna().sum() > 3
         ]
 
         with col_ctrl2:
@@ -365,7 +336,7 @@ with tab_visualizza:
         st.pyplot(fig_custom)
 
     else:
-        st.info("Nessun dato presente nel database cloud. Vai alla scheda 'Importa Excel Storico' per caricare il tuo file.")
+        st.info("Nessun dato presente nel database. Vai alla scheda 'Importa Excel Storico' per caricare il tuo file.")
 
 # --- SCHEDA 2: NUOVO INSERIMENTO DIGITALE ---
 with tab_compila:
@@ -384,10 +355,10 @@ with tab_compila:
     '''
     st.components.v1.html(iframe_form, height=920, scrolling=True)
 
-# --- SCHEDA 3: IMPORTAZIONE PERMANENTE SU KOBO CLOUD ---
+# --- SCHEDA 3: IMPORTAZIONE PERMANENTE EXCEL ---
 with tab_importa:
-    st.subheader("Caricamento ed Estensione Permanete del Database Cloud")
-    st.markdown("🔒 **Protezione Dati:** I campi personali (*Nome, Cognome, Email, Telefono*) vengono **esclusi** prima del salvataggio nel cloud.")
+    st.subheader("Caricamento ed Estensione Permanete del Database")
+    st.markdown("🔒 **Protezione Dati:** I campi personali (*Nome, Cognome, Email, Telefono*) vengono **automaticamente filtrati ed esclusi**.")
     
     file_caricato = st.file_uploader("Trascina qui il file Excel con i soggetti", type=["xlsx"])
     
@@ -396,57 +367,30 @@ with tab_importa:
             df_excel = pd.read_excel(file_caricato, sheet_name=0)
             df_excel.columns = df_excel.columns.str.strip()
             
+            # FILTRO PRIVACY
             colonne_da_mantenere = [
                 c for c in df_excel.columns 
                 if str(c).lower().strip() not in COLONNE_PRIVACY
             ]
             df_anonimo = df_excel[colonne_da_mantenere].copy()
             
-            st.write(f"### Rilevati **{len(df_anonimo)}** soggetti nell'Excel (*pronti per l'invio permanente al cloud*):")
+            st.write(f"### Rilevati **{len(df_anonimo)}** soggetti nell'Excel:")
             st.dataframe(df_anonimo.astype(str), use_container_width=True)
             
-            if st.button("🚀 Salva Definitivamente i Soggetti nel Cloud Kobo"):
-                headers = {"Authorization": f"Token {KOBO_TOKEN}"}
-                successi = 0
-                errori = 0
+            if st.button("🚀 Salva Definitivamente i Soggetti nel Database"):
+                if df_attuale.empty:
+                    df_unito = df_anonimo.copy()
+                else:
+                    df_unito = pd.concat([df_attuale, df_anonimo], ignore_index=True)
                 
-                barra_progresso = st.progress(0)
-                totale = len(df_anonimo)
+                # De-duplicazione
+                cols_cliniches = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo'] if c in df_unito.columns]
+                if cols_cliniches:
+                    df_unito = df_unito.drop_duplicates(subset=cols_cliniches, keep='last').reset_index(drop=True)
                 
-                for riga_id, (_, riga) in enumerate(df_anonimo.iterrows()):
-                    campi_form = {}
-                    for colonna, valore in riga.items():
-                        if pd.notna(valore) and str(valore).strip() != "":
-                            col_nome = str(colonna).strip()
-                            if isinstance(valore, pd.Timestamp) or (hasattr(valore, 'strftime')):
-                                val_str = valore.strftime('%Y-%m-%d')
-                            else:
-                                val_str = str(valore).strip()
-                            campi_form[col_nome] = val_str
-                    
-                    data_screening = campi_form.get('Data_Misuriamoci', '2026-01-01')
-                    
-                    xml_data = f'<data id="{FORM_ID}">'
-                    for col_nome, val_str in campi_form.items():
-                        tag_valido = col_nome.replace(" ", "_").replace("/", "_").replace("-", "_")
-                        xml_data += f'<{tag_valido}>{val_str}</{tag_valido}>'
-                    
-                    uid_univoco = f"uuid:{uuid.uuid4()}"
-                    xml_data += f'<meta><instanceID>{uid_univoco}</instanceID></meta>'
-                    xml_data += '</data>'
-                    
-                    files = {'xml_submission_file': ('submission.xml', xml_data, 'text/xml')}
-                    res = requests.post(URL_SUBMISSION, headers=headers, files=files)
-                    
-                    if res.status_code in [200, 201, 202]:
-                        successi += 1
-                    else:
-                        errori += 1
-                    
-                    barra_progresso.progress((riga_id + 1) / totale)
+                salva_database_locale(df_unito)
                 
-                st.success(f"🎉 Salvati con successo {successi} soggetti nel database cloud permanente di Kobo!")
-                st.cache_data.clear()
+                st.success(f"🎉 Salvati con successo {len(df_anonimo)} soggetti nel database permanente!")
                 st.balloons()
                 st.rerun()
                     
