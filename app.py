@@ -46,12 +46,14 @@ def carica_utenti():
         "admin": {
             "password": "misuriamoci2026",
             "nome": "Amministratore Campagna",
+            "email": "admin@misuriamoci.it",
             "ruolo": "Admin",
             "attivo": True
         },
         "operatore1": {
             "password": "volontariocri",
             "nome": "Operatore Campo",
+            "email": "operatore1@cri.it",
             "ruolo": "Operatore",
             "attivo": True
         }
@@ -414,50 +416,77 @@ with tab_importa:
         except Exception as e:
             st.error(f"Errore durante l'elaborazione dell'Excel: {str(e)}")
 
-# --- SCHEDA 4 (RISERVATA ADMIN): GESTIONE ACCESSI UTENTI PERSISTENTE ---
+# --- SCHEDA 4 (RISERVATA ADMIN): GESTIONE ACCESSI ED EMAIL UTENTI ---
 if tab_admin is not None:
     with tab_admin:
-        st.subheader("⚙️ Pannello Amministratore: Gestione Credenziali e Permessi")
+        st.subheader("⚙️ Pannello Amministratore: Gestione Credenziali, Email e Permessi")
         
-        col_u1, col_u2 = st.columns([2, 1])
+        col_u1, col_u2 = st.columns([3, 2])
         
         with col_u1:
-            st.write("### Utenti Attualmente Registrati")
+            st.write("### Utenti Attualmente Registrati nel Sistema")
             df_utenti = pd.DataFrame.from_dict(st.session_state['utenti_db'], orient='index')
             df_utenti = df_utenti.reset_index().rename(columns={'index': 'Username'})
-            df_utenti_show = df_utenti[['Username', 'nome', 'ruolo', 'attivo']].copy()
+            
+            # Garanzia presenza colonna email
+            if 'email' not in df_utenti.columns:
+                df_utenti['email'] = 'Non specificata'
+            
+            df_utenti['Stato Accesso'] = df_utenti['attivo'].apply(lambda x: "🟢 Attivo" if x else "🔴 Disabilitato (Bloccato)")
+            df_utenti_show = df_utenti[['Username', 'nome', 'email', 'ruolo', 'Stato Accesso']].copy()
+            df_utenti_show.columns = ['Username', 'Nome / Ente', 'Email', 'Ruolo', 'Stato Accesso']
             st.dataframe(df_utenti_show, use_container_width=True)
             
         with col_u2:
-            st.write("### ➕ Aggiungi Nuovo Utente")
-            nuovo_usr = st.text_input("Nuovo Username")
-            nuovo_pwd = st.text_input("Nuova Password", type="password")
+            st.write("### ➕ Crea Nuovo Account Utente")
+            nuovo_usr = st.text_input("Username (per il login)")
+            nuovo_pwd = st.text_input("Password", type="password")
             nuovo_nome = st.text_input("Nome e Cognome / Ente")
+            nuova_email = st.text_input("Indirizzo Email")
             nuovo_ruolo = st.selectbox("Ruolo", ["Operatore", "Admin"])
             
-            if st.button("Crea Account Utente", use_container_width=True):
+            if st.button("➕ Registra e Salva Utente", use_container_width=True):
                 if nuovo_usr and nuovo_pwd and nuovo_nome:
                     usr_key = nuovo_usr.strip()
                     st.session_state['utenti_db'][usr_key] = {
                         "password": nuovo_pwd.strip(),
                         "nome": nuovo_nome.strip(),
+                        "email": nuova_email.strip() if nuova_email else "Non specificata",
                         "ruolo": nuovo_ruolo,
                         "attivo": True
                     }
                     salva_utenti(st.session_state['utenti_db'])
-                    st.success(f"Utente '{usr_key}' registrato e salvato permanentemente!")
+                    st.success(f"Utente '{usr_key}' registrato e salvato con successo!")
                     st.rerun()
                 else:
-                    st.warning("Compila tutti i campi obbligatori.")
+                    st.warning("Compila i campi obbligatori: Username, Password e Nome.")
                     
         st.write("---")
-        st.write("### 🔒 Revoca / Abilita Accesso Utente")
-        usr_sel = st.selectbox("Seleziona utente da gestire:", list(st.session_state['utenti_db'].keys()))
-        if usr_sel != "admin":
-            stato_attuale = st.session_state['utenti_db'][usr_sel]['attivo']
-            nuovo_stato = st.radio("Stato Account:", [True, False], format_func=lambda x: "Abilitato (Attivo)" if x else "Disabilitato (Bloccato)", index=0 if stato_attuale else 1)
-            if st.button("Salva Stato Utente"):
-                st.session_state['utenti_db'][usr_sel]['attivo'] = nuovo_stato
-                salva_utenti(st.session_state['utenti_db'])
-                st.success("Permessi aggiornati e salvati!")
-                st.rerun()
+        st.write("### 🔒 Revoca / Ripristina Accesso a un Utente")
+        
+        elenco_utenti = list(st.session_state['utenti_db'].keys())
+        usr_sel = st.selectbox("Seleziona l'utente di cui modificare i permessi:", elenco_utenti)
+        
+        if usr_sel:
+            u_data = st.session_state['utenti_db'][usr_sel]
+            st.info(f"Utente selezionato: **{u_data.get('nome')}** ({u_data.get('email', 'N/D')}) — Ruolo: **{u_data.get('ruolo')}**")
+            
+            if usr_sel == "admin":
+                st.warning("L'account principale 'admin' non può essere disabilitato.")
+            else:
+                stato_attuale = u_data.get('attivo', True)
+                nuovo_stato = st.radio(
+                    "Stato dell'account:", 
+                    [True, False], 
+                    format_func=lambda x: "🟢 Abilitato (Può accedere)" if x else "🔴 Disabilitato (Accesso Bloccato)", 
+                    index=0 if stato_attuale else 1
+                )
+                
+                if st.button("💾 Salva Stato Accesso Utente"):
+                    st.session_state['utenti_db'][usr_sel]['attivo'] = nuovo_stato
+                    salva_utenti(st.session_state['utenti_db'])
+                    if nuovo_stato:
+                        st.success(f"Accesso ripristinato per l'utente '{usr_sel}'.")
+                    else:
+                        st.error(f"Accesso bloccato per l'utente '{usr_sel}'. Non potrà più accedere finché non lo riabiliti.")
+                    st.rerun()
