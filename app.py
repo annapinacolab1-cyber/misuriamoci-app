@@ -65,7 +65,7 @@ def ottieni_database_completo():
         return df_loc
     
     df_unito = pd.concat([df_loc, df_kob], ignore_index=True)
-    cols_check = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo'] if c in df_unito.columns]
+    cols_check = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo', 'Trigliceridi', Uricemia'] if c in df_unito.columns]
     if cols_check:
         df_unito = df_unito.drop_duplicates(subset=cols_check, keep='last').reset_index(drop=True)
     return df_unito
@@ -441,11 +441,15 @@ with tab_compila:
             glicemia_m = st.number_input("Glicemia (mg/dl)", min_value=30, max_value=500, value=90)
         with cp4:
             colesterolo_m = st.number_input("Colesterolo (mg/dl)", min_value=50, max_value=600, value=180)
-            
-        cp5, cp6 = st.columns(2)
         with cp5:
-            p_max_m = st.number_input("Pressione Sistemica Max (mmHg)", min_value=50, max_value=250, value=120)
+        	 trigliceridi_m = st.number_input("Trigliceridi (mg/dl)", min_value=50, max_value=600, value=180)
         with cp6:
+        	 uricemia_m = st.number_input("Uricemia (mg/dl)", min_value=1, max_value=20, value=10)	 
+   
+        cp7, cp8 = st.columns(2)
+        with cp7:
+            p_max_m = st.number_input("Pressione Sistemica Max (mmHg)", min_value=50, max_value=250, value=120)
+        with cp8:
             p_min_m = st.number_input("Pressione Diastolica Min (mmHg)", min_value=30, max_value=150, value=80)
 
         st.markdown("#### 3. Punteggi Stili di Vita (Valori Radar: -1 = Non Valido, 1 = Basso, 2 = Medio, 3 = Ottimale)")
