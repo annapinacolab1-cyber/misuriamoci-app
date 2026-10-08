@@ -6,17 +6,19 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 import os
 import json
+import uuid
 
 # Configurazione della pagina Streamlit
 st.set_page_config(layout="wide", page_title="Piattaforma Screening - Misuriamoci")
 
-# Path e Credenziali
+# Path e Credenziali Kobo
 DATA_FILE = "database_misuriamoci_persistente.csv"
 USERS_FILE = "utenti_db.json"
 
 KOBO_TOKEN = "6a1f13e6c6833e0b213b3c34a171f3f2ab785833"
 FORM_ID = "MWb6A71g"
 URL_LETTURA = f"https://eu.kobotoolbox.org/api/v2/assets/{FORM_ID}/data.json?limit=10000"
+URL_SUBMISSION = "https://eu.kobotoolbox.org/submission"
 URL_FORM_WEB = "https://ee-eu.kobotoolbox.org/x/MWb6A71g"
 
 COLONNE_PRIVACY = [
@@ -26,7 +28,7 @@ COLONNE_PRIVACY = [
 ]
 
 # =========================================================
-# 1. FUNZIONI PER SALVATAGGIO E CARICAMENTO DATI
+# 1. FUNZIONI DI GESTIONE DATI E PERSISTENZA
 # =========================================================
 def carica_database_locale():
     if os.path.exists(DATA_FILE):
@@ -40,7 +42,6 @@ def salva_database_locale(df):
     df.to_csv(DATA_FILE, index=False)
 
 def scarica_dati_kobo():
-    """Scarica le nuove schede compilate direttamente da KoboToolbox Cloud"""
     headers = {"Authorization": f"Token {KOBO_TOKEN}"}
     try:
         response = requests.get(URL_LETTURA, headers=headers, timeout=5)
@@ -53,7 +54,6 @@ def scarica_dati_kobo():
     return pd.DataFrame()
 
 def ottieni_database_completo():
-    """Unisce il database dell'Excel con le nuove schede inviate dal Form Kobo"""
     df_loc = carica_database_locale()
     df_kob = scarica_dati_kobo()
     
@@ -64,12 +64,30 @@ def ottieni_database_completo():
     if df_kob.empty:
         return df_loc
     
-    # Unione e deduplicazione
     df_unito = pd.concat([df_loc, df_kob], ignore_index=True)
     cols_check = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo'] if c in df_unito.columns]
     if cols_check:
         df_unito = df_unito.drop_duplicates(subset=cols_check, keep='last').reset_index(drop=True)
     return df_unito
+
+def invia_singola_scheda_a_kobo(dati_dict):
+    """Invia un singolo record generato dall'app direttamente alle API di Kobo Cloud"""
+    headers = {"Authorization": f"Token {KOBO_TOKEN}"}
+    xml_data = f'<data id="{FORM_ID}">'
+    for k, v in dati_dict.items():
+        if pd.notna(v) and str(v).strip() != "":
+            tag = str(k).replace(" ", "_").replace("/", "_").replace("-", "_")
+            xml_data += f'<{tag}>{v}</{tag}>'
+    
+    uid_univoco = f"uuid:{uuid.uuid4()}"
+    xml_data += f'<meta><instanceID>{uid_univoco}</instanceID></meta></data>'
+    
+    files = {'xml_submission_file': ('submission.xml', xml_data, 'text/xml')}
+    try:
+        res = requests.post(URL_SUBMISSION, headers=headers, files=files, timeout=8)
+        return res.status_code in [200, 201, 202]
+    except:
+        return False
 
 def carica_utenti():
     if os.path.exists(USERS_FILE):
@@ -99,7 +117,6 @@ def salva_utenti(utenti_dict):
     with open(USERS_FILE, 'w', encoding='utf-8') as f:
         json.dump(utenti_dict, f, ensure_ascii=False, indent=4)
 
-# Caricamento utenti persistente
 st.session_state['utenti_db'] = carica_utenti()
 
 # =========================================================
@@ -143,7 +160,7 @@ if not st.session_state['logged_in']:
     st.stop()
 
 # =========================================================
-# 3. INTESTAZIONE ED ELEMENTI UTENTE AUTENTICATO
+# 3. INTESTAZIONE UTENTE
 # =========================================================
 user_curr = st.session_state['user_info']
 
@@ -164,13 +181,12 @@ with col_h2:
         st.session_state['user_info'] = None
         st.rerun()
 
-# Caricamento del database completo (Locale + Kobo Cloud)
 df_attuale = ottieni_database_completo()
 
 # =========================================================
 # 4. SCHEDE APPLICAZIONE
 # =========================================================
-elenco_schede = ["📊 Archivio Screening & Grafici", "📝 Compila Nuovo Form", "📥 Importa Excel Storico"]
+elenco_schede = ["📊 Archivio Screening & Grafici", "📝 Compila Nuovo Form (Diretto)", "📥 Importa Excel Storico"]
 
 if user_curr['ruolo'] == "Admin":
     elenco_schede.append("⚙️ Gestione Accessi Utenti")
@@ -188,7 +204,7 @@ with tab_visualizza:
     with col_t1:
         st.subheader("Database Centrale Screening")
     with col_t2:
-        if st.button("🔄 Sincronizza con Kobo Cloud", use_container_width=True):
+        if st.button("🔄 Sincronizza Dati", use_container_width=True):
             st.rerun()
     
     if not df_attuale.empty:
@@ -396,24 +412,91 @@ with tab_visualizza:
         st.pyplot(fig_custom)
 
     else:
-        st.info("Nessun dato presente nel database. Compila un form o importa un file Excel.")
+        st.info("Nessun dato presente nel database. Compila una scheda o importa un file Excel.")
 
-# --- SCHEDA 2: NUOVO INSERIMENTO DIGITALE ---
+# --- SCHEDA 2: INSERIMENTO DIRETTO NATIVO (SENZA IFRAME) ---
 with tab_compila:
-    st.subheader("Inserimento Scheda in Tempo Reale")
-    st.markdown("Compila la scheda direttamente da qui oppure aprila in una nuova finestra.")
+    st.subheader("📝 Compilazione Scheda Screening (Inserimento Diretto)")
+    st.markdown("Inserisci i dati del cittadino: verranno inviati al **Cloud Kobo** e salvati all'istante nel database dell'app.")
     
-    st.link_button("🔗 Apri il Modulo a Tutto Schermo in una Nuova Scheda", URL_FORM_WEB)
-    
-    iframe_form = f'''
-    <iframe src="{URL_FORM_WEB}" 
-            width="100%" 
-            height="900px" 
-            style="border:1px solid #ddd; border-radius:8px;" 
-            allow="geolocation; camera; microphone">
-    </iframe>
-    '''
-    st.components.v1.html(iframe_form, height=920, scrolling=True)
+    with st.form("form_inserimento_diretto", clear_on_submit=True):
+        st.markdown("#### 1. Dati Anagrafici Sanitari")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            data_m = st.date_input("Data Screening")
+        with c2:
+            sesso_m = st.selectbox("Sesso", ["M", "F"])
+        with c3:
+            eta_m = st.number_input("Età (anni)", min_value=1, max_value=120, value=50)
+        with c4:
+            fumatrice_m = st.selectbox("Fumatore / E-cig", ["No", "Sì"])
+            
+        st.markdown("#### 2. Parametri Antropometrici e Clinici")
+        cp1, cp2, cp3, cp4 = st.columns(4)
+        with cp1:
+            peso_m = st.number_input("Peso (kg)", min_value=20.0, max_value=250.0, value=70.0)
+        with cp2:
+            altezza_m = st.number_input("Altezza (cm)", min_value=80, max_value=230, value=170)
+        with cp3:
+            glicemia_m = st.number_input("Glicemia (mg/dl)", min_value=30, max_value=500, value=90)
+        with cp4:
+            colesterolo_m = st.number_input("Colesterolo (mg/dl)", min_value=50, max_value=600, value=180)
+            
+        cp5, cp6 = st.columns(2)
+        with cp5:
+            p_max_m = st.number_input("Pressione Sistemica Max (mmHg)", min_value=50, max_value=250, value=120)
+        with cp6:
+            p_min_m = st.number_input("Pressione Diastolica Min (mmHg)", min_value=30, max_value=150, value=80)
+
+        st.markdown("#### 3. Punteggi Stili di Vita (Valori Radar: -1 = Non Valido, 1 = Basso, 2 = Medio, 3 = Ottimale)")
+        cr1, cr2, cr3, cr4, cr5, cr6 = st.columns(6)
+        with cr1:
+            alim_m = st.selectbox("Alimentazione", [3, 2, 1, -1])
+        with cr2:
+            att_f_m = st.selectbox("Attività Fisica", [3, 2, 1, -1])
+        with cr3:
+            alc_m = st.selectbox("Alcool", [3, 2, 1, -1])
+        with cr4:
+            tab_m = st.selectbox("Tabacco/E-cig", [3, 2, 1, -1])
+        with cr5:
+            ben_m = st.selectbox("Benessere", [3, 2, 1, -1])
+        with cr6:
+            son_m = st.selectbox("Sonno", [3, 2, 1, -1])
+
+        btn_invia_scheda = st.form_submit_button("💾 Salva e Invia a Kobo Cloud", use_container_width=True)
+
+    if btn_invia_scheda:
+        nuova_scheda = {
+            "Data_Misuriamoci": str(data_m),
+            "Sesso": str(sesso_m),
+            "Et": str(eta_m),
+            "Peso": str(peso_m),
+            "Altezza": str(altezza_m),
+            "Glicemia": str(glicemia_m),
+            "Colesterolo": str(colesterolo_m),
+            "Pressione_massima": str(p_max_m),
+            "Pressione_minima": str(p_min_m),
+            "Alimentazione": alim_m,
+            "Attivita_fisica": att_f_m,
+            "Alcool": alc_m,
+            "Tabacco_e_cig": tab_m,
+            "Benessere_percepito": ben_m,
+            "Qualita_del_sonno": son_m
+        }
+        
+        # 1. Salva nel file locale
+        df_loc = carica_database_locale()
+        df_nuovo_loc = pd.concat([df_loc, pd.DataFrame([nuova_scheda])], ignore_index=True)
+        salva_database_locale(df_nuovo_loc)
+        
+        # 2. Invia direttamente a Kobo via API
+        inviato_kobo = invia_singola_scheda_a_kobo(nuova_scheda)
+        
+        if inviato_kobo:
+            st.success("🎉 Scheda salvata con successo sia nell'App che su Kobo Cloud!")
+        else:
+            st.warning("⚠️ Scheda salvata nell'App, ma non è stato possibile sincronizzarla subito con Kobo Cloud. Rimane comunque nel database!")
+        st.balloons()
 
 # --- SCHEDA 3: IMPORTAZIONE PERMANENTE EXCEL ---
 with tab_importa:
@@ -427,7 +510,6 @@ with tab_importa:
             df_excel = pd.read_excel(file_caricato, sheet_name=0)
             df_excel.columns = df_excel.columns.str.strip()
             
-            # FILTRO PRIVACY
             colonne_da_mantenere = [
                 c for c in df_excel.columns 
                 if str(c).lower().strip() not in COLONNE_PRIVACY
@@ -443,7 +525,6 @@ with tab_importa:
                 else:
                     df_unito = pd.concat([df_attuale, df_anonimo], ignore_index=True)
                 
-                # De-duplicazione
                 cols_cliniches = [c for c in ['Data_Misuriamoci', 'Et', 'Sesso', 'Peso', 'Altezza', 'Glicemia', 'Colesterolo'] if c in df_unito.columns]
                 if cols_cliniches:
                     df_unito = df_unito.drop_duplicates(subset=cols_cliniches, keep='last').reset_index(drop=True)
